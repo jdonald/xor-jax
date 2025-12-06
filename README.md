@@ -15,3 +15,15 @@ Inputs and outputs of the network are in the range 0 to 1.0. Treat a threshold
 as 0.5 or higher to mean a boolean ON, below that to be OFF. Ideal output is
 then 1.0 (ON) or 0.0 (OFF) matching what XOR would do. e.g. func(0.8, 0.7) --> 0.0
 func(0.3, 0.9) --> 1.0
+
+## Network Architecture
+
+Use a simple neural network topology, ideally just two layers (one hidden layer
+with a small number of neurons, plus the output layer). XOR is a classic problem
+that can be solved with minimal architecture, and a simpler network will train
+quickly and reliably.
+
+## Testing Inference
+
+When testing inference, print benchmarks from running first on the GPU and then
+on the CPU.
