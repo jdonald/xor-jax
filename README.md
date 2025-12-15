@@ -21,6 +21,15 @@ func(0.3, 0.9) --> 1.0
 Simple 2-layer network: 2 inputs → 4 hidden neurons (sigmoid) → 1 output (sigmoid).
 Uses BCE loss and SGD optimizer.
 
+## Requirements
+
+```
+python3 -m virtualenv myenv
+myenv/bin/activate
+pip install -r requirements.txt
+```
+(but actually the only dep in `requirements.txt` is `pip install torch`)
+
 ## Usage
 
 ```bash
@@ -54,3 +63,6 @@ Samples: 200
 Correct: 196/200
 Error rate: 2.00%
 ```
+
+Yeah, the CPU run is consistently three times faster than the GPU one. Similar results on an Ada Lovelace mobile GPU.
+Perhaps that's the way it is with small two-layer networks.
