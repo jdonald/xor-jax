@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """
-XOR Neural Network - Train a network to recognize XOR function using PyTorch.
+XOR Neural Network - Train a network to recognize XOR function using JAX.
 """
 
 import argparse
 import json
 import time
 import random
-import torch
-import torch.nn as nn
-import torch.optim as optim
+import pickle
+import jax
+import jax.numpy as jnp
+from flax import linen as nn
+import optax
 
 
 class XORNet(nn.Module):
     """Simple 2-layer neural network for XOR function."""
+    hidden_size: int = 4
 
-    def __init__(self, hidden_size=4):
-        super().__init__()
-        self.hidden = nn.Linear(2, hidden_size)
-        self.output = nn.Linear(hidden_size, 1)
-        self.activation = nn.Sigmoid()
-
-    def forward(self, x):
-        x = self.activation(self.hidden(x))
-        x = self.activation(self.output(x))
+    @nn.compact
+    def __call__(self, x):
+        x = nn.Dense(features=self.hidden_size)(x)
+        x = nn.sigmoid(x)
+        x = nn.Dense(features=1)(x)
+        x = nn.sigmoid(x)
         return x
 
 
@@ -59,73 +59,108 @@ def load_data(filepath: str) -> list[dict]:
         return json.load(f)
 
 
-def data_to_tensors(data: list[dict], device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-    """Convert data list to PyTorch tensors."""
-    inputs = torch.tensor([[d["inputs"][0], d["inputs"][1]] for d in data], dtype=torch.float32, device=device)
-    labels = torch.tensor([[d["label"]] for d in data], dtype=torch.float32, device=device)
+def data_to_arrays(data: list[dict]) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Convert data list to JAX arrays."""
+    inputs = jnp.array([[d["inputs"][0], d["inputs"][1]] for d in data], dtype=jnp.float32)
+    labels = jnp.array([[d["label"]] for d in data], dtype=jnp.float32)
     return inputs, labels
 
 
-def train(model: XORNet, data_path: str, weights_path: str, epochs: int = 1000, lr: float = 1.0, device: torch.device = None):
+def bce_loss(predictions: jnp.ndarray, labels: jnp.ndarray) -> jnp.ndarray:
+    """Binary cross-entropy loss."""
+    epsilon = 1e-7
+    predictions = jnp.clip(predictions, epsilon, 1.0 - epsilon)
+    return -jnp.mean(labels * jnp.log(predictions) + (1 - labels) * jnp.log(1 - predictions))
+
+
+def train(model: XORNet, data_path: str, weights_path: str, epochs: int = 1000, lr: float = 1.0, device: str = None):
     """Train the model and save weights."""
     if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Check if GPU is available
+        devices = jax.devices()
+        device_type = devices[0].platform
+        print(f"Using device: {device_type}")
 
-    model = model.to(device)
+    # Load data
     data = load_data(data_path)
-    inputs, labels = data_to_tensors(data, device)
+    inputs, labels = data_to_arrays(data)
 
-    criterion = nn.BCELoss()
-    optimizer = optim.SGD(model.parameters(), lr=lr)
+    # Initialize model parameters
+    rng = jax.random.PRNGKey(0)
+    params = model.init(rng, jnp.ones((1, 2)))
 
-    print(f"Training on {device} with {len(data)} samples for {epochs} epochs...")
+    # Setup optimizer
+    optimizer = optax.sgd(learning_rate=lr)
+    opt_state = optimizer.init(params)
+
+    # Define training step
+    @jax.jit
+    def train_step(params, opt_state, inputs, labels):
+        def loss_fn(params):
+            predictions = model.apply(params, inputs)
+            return bce_loss(predictions, labels)
+
+        loss, grads = jax.value_and_grad(loss_fn)(params)
+        updates, opt_state = optimizer.update(grads, opt_state)
+        params = optax.apply_updates(params, updates)
+        return params, opt_state, loss
+
+    print(f"Training with {len(data)} samples for {epochs} epochs...")
 
     for epoch in range(epochs):
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+        params, opt_state, loss = train_step(params, opt_state, inputs, labels)
 
         if (epoch + 1) % 100 == 0:
-            print(f"Epoch {epoch + 1}/{epochs}, Loss: {loss.item():.6f}")
+            print(f"Epoch {epoch + 1}/{epochs}, Loss: {float(loss):.6f}")
 
-    torch.save(model.state_dict(), weights_path)
+    # Save weights
+    with open(weights_path, 'wb') as f:
+        pickle.dump(params, f)
     print(f"Saved weights to {weights_path}")
 
 
 def test(model: XORNet, data_path: str, weights_path: str):
     """Test the model and report error rate with GPU/CPU benchmarks."""
     data = load_data(data_path)
+    inputs, labels = data_to_arrays(data)
+
+    # Load weights
+    with open(weights_path, 'rb') as f:
+        params = pickle.load(f)
+
+    # Create JIT-compiled inference function
+    @jax.jit
+    def predict(params, inputs):
+        return model.apply(params, inputs)
 
     # Test on GPU first (if available)
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        model_gpu = XORNet()
-        model_gpu.load_state_dict(torch.load(weights_path, map_location=device, weights_only=True))
-        model_gpu = model_gpu.to(device)
-        model_gpu.eval()
+    devices = jax.devices()
+    has_gpu = any(d.platform == 'gpu' for d in devices)
 
-        inputs, labels = data_to_tensors(data, device)
+    if has_gpu:
+        # Move data to GPU
+        gpu_device = [d for d in devices if d.platform == 'gpu'][0]
+        inputs_gpu = jax.device_put(inputs, gpu_device)
+        params_gpu = jax.device_put(params, gpu_device)
 
         # Warmup
-        with torch.no_grad():
-            for _ in range(10):
-                _ = model_gpu(inputs)
+        for _ in range(10):
+            _ = predict(params_gpu, inputs_gpu)
 
-        torch.cuda.synchronize()
+        # Block until all computations are done
+        jax.block_until_ready(predict(params_gpu, inputs_gpu))
+
         start_time = time.perf_counter()
-        with torch.no_grad():
-            outputs = model_gpu(inputs)
-        torch.cuda.synchronize()
+        outputs = predict(params_gpu, inputs_gpu)
+        jax.block_until_ready(outputs)
         gpu_time = time.perf_counter() - start_time
 
-        predictions = (outputs >= 0.5).float()
-        correct = (predictions == labels).sum().item()
+        predictions = (outputs >= 0.5).astype(jnp.float32)
+        correct = (predictions == labels).sum()
         error_rate = 1.0 - (correct / len(data))
 
         print(f"\n=== GPU Benchmark ===")
-        print(f"Device: {torch.cuda.get_device_name(0)}")
+        print(f"Device: {gpu_device.device_kind}")
         print(f"Inference time: {gpu_time * 1000:.4f} ms")
         print(f"Samples: {len(data)}")
         print(f"Correct: {int(correct)}/{len(data)}")
@@ -134,26 +169,23 @@ def test(model: XORNet, data_path: str, weights_path: str):
         print("\nGPU not available, skipping GPU benchmark.")
 
     # Test on CPU
-    device = torch.device("cpu")
-    model_cpu = XORNet()
-    model_cpu.load_state_dict(torch.load(weights_path, map_location=device, weights_only=True))
-    model_cpu = model_cpu.to(device)
-    model_cpu.eval()
-
-    inputs, labels = data_to_tensors(data, device)
+    cpu_device = [d for d in devices if d.platform == 'cpu'][0]
+    inputs_cpu = jax.device_put(inputs, cpu_device)
+    params_cpu = jax.device_put(params, cpu_device)
 
     # Warmup
-    with torch.no_grad():
-        for _ in range(10):
-            _ = model_cpu(inputs)
+    for _ in range(10):
+        _ = predict(params_cpu, inputs_cpu)
+
+    jax.block_until_ready(predict(params_cpu, inputs_cpu))
 
     start_time = time.perf_counter()
-    with torch.no_grad():
-        outputs = model_cpu(inputs)
+    outputs = predict(params_cpu, inputs_cpu)
+    jax.block_until_ready(outputs)
     cpu_time = time.perf_counter() - start_time
 
-    predictions = (outputs >= 0.5).float()
-    correct = (predictions == labels).sum().item()
+    predictions = (outputs >= 0.5).astype(jnp.float32)
+    correct = (predictions == labels).sum()
     error_rate = 1.0 - (correct / len(data))
 
     print(f"\n=== CPU Benchmark ===")
@@ -176,14 +208,14 @@ def main():
     # Train command
     train_parser = subparsers.add_parser("train", help="Train the network and save weights")
     train_parser.add_argument("--data", type=str, default="data.json", help="Training data file (default: data.json)")
-    train_parser.add_argument("--weights", type=str, default="weights.pt", help="Output weights file (default: weights.pt)")
+    train_parser.add_argument("--weights", type=str, default="weights.pkl", help="Output weights file (default: weights.pkl)")
     train_parser.add_argument("--epochs", type=int, default=1000, help="Number of training epochs (default: 1000)")
     train_parser.add_argument("--lr", type=float, default=1.0, help="Learning rate (default: 1.0)")
 
     # Test command
     test_parser = subparsers.add_parser("test", help="Test the network and report error rate")
     test_parser.add_argument("--data", type=str, default="data.json", help="Test data file (default: data.json)")
-    test_parser.add_argument("--weights", type=str, default="weights.pt", help="Weights file to load (default: weights.pt)")
+    test_parser.add_argument("--weights", type=str, default="weights.pkl", help="Weights file to load (default: weights.pkl)")
 
     args = parser.parse_args()
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A PyTorch program to train a neural network to recognize an XOR function. The program should support three modes of operation:
+A JAX program to train a neural network to recognize an XOR function. The program should support three modes of operation:
 1. Generate random training/test data given a specified seed
 2. Train and save network weights
 3. Run a saved network through test data and report error rate
