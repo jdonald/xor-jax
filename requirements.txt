@@ -1,3 +1,4 @@
 jax[cpu]
+jax[cuda12]
 flax
 optax

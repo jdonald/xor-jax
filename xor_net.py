@@ -169,30 +169,37 @@ def test(model: XORNet, data_path: str, weights_path: str):
         print("\nGPU not available, skipping GPU benchmark.")
 
     # Test on CPU
-    cpu_device = [d for d in devices if d.platform == 'cpu'][0]
-    inputs_cpu = jax.device_put(inputs, cpu_device)
-    params_cpu = jax.device_put(params, cpu_device)
+    try:
+        cpu_devices = jax.devices('cpu')
+        if cpu_devices:
+            cpu_device = cpu_devices[0]
+            inputs_cpu = jax.device_put(inputs, cpu_device)
+            params_cpu = jax.device_put(params, cpu_device)
 
-    # Warmup
-    for _ in range(10):
-        _ = predict(params_cpu, inputs_cpu)
+            # Warmup
+            for _ in range(10):
+                _ = predict(params_cpu, inputs_cpu)
 
-    jax.block_until_ready(predict(params_cpu, inputs_cpu))
+            jax.block_until_ready(predict(params_cpu, inputs_cpu))
 
-    start_time = time.perf_counter()
-    outputs = predict(params_cpu, inputs_cpu)
-    jax.block_until_ready(outputs)
-    cpu_time = time.perf_counter() - start_time
+            start_time = time.perf_counter()
+            outputs = predict(params_cpu, inputs_cpu)
+            jax.block_until_ready(outputs)
+            cpu_time = time.perf_counter() - start_time
 
-    predictions = (outputs >= 0.5).astype(jnp.float32)
-    correct = (predictions == labels).sum()
-    error_rate = 1.0 - (correct / len(data))
+            predictions = (outputs >= 0.5).astype(jnp.float32)
+            correct = (predictions == labels).sum()
+            error_rate = 1.0 - (correct / len(data))
 
-    print(f"\n=== CPU Benchmark ===")
-    print(f"Inference time: {cpu_time * 1000:.4f} ms")
-    print(f"Samples: {len(data)}")
-    print(f"Correct: {int(correct)}/{len(data)}")
-    print(f"Error rate: {error_rate * 100:.2f}%")
+            print(f"\n=== CPU Benchmark ===")
+            print(f"Inference time: {cpu_time * 1000:.4f} ms")
+            print(f"Samples: {len(data)}")
+            print(f"Correct: {int(correct)}/{len(data)}")
+            print(f"Error rate: {error_rate * 100:.2f}%")
+        else:
+            print("\nCPU device not available, skipping CPU benchmark.")
+    except RuntimeError:
+        print("\nCPU backend not available, skipping CPU benchmark.")
 
 
 def main():

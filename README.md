@@ -52,16 +52,16 @@ Sample output:
 ```
 === GPU Benchmark ===
 Device: Tesla T4
-Inference time: 0.1907 ms
+Inference time: 0.0839 ms
 Samples: 200
-Correct: 196/200
-Error rate: 2.00%
+Correct: 198/200
+Error rate: 1.00%
 
 === CPU Benchmark ===
-Inference time: 0.0703 ms
+Inference time: 0.0491 ms
 Samples: 200
-Correct: 196/200
-Error rate: 2.00%
+Correct: 198/200
+Error rate: 1.00%
 ```
 
 Note: For small two-layer networks like this, CPU inference may be faster than GPU due to the overhead of data transfer and kernel launch.
